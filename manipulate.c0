@@ -1,0 +1,466 @@
+#use <rand>
+
+
+// Type frac used to signify a variable is not meant to represent a standard int
+// For example, the variable might represent a value in the range [-1, 1)
+// The value represented by the variable is clarified in comments
+typedef int frac;
+
+
+int pow(int base, int power)
+{
+  if (power == 0) {
+    return 1;
+  } else {
+    return pow(base, power - 1) * base;
+  }
+}
+
+int factorial(int x)
+{
+  if (x == 1) return 1;
+  else {
+    int prev = factorial(x - 1);
+    if (prev <= int_max() / x) {return x * factorial(x - 1);}
+    else {return int_max();}
+  }
+}
+
+// Bit shifts an int x right by shift bits, without carrying the sign bit.
+int r_shift(int x, int shift)
+//@requires 1 <= shift && shift <= 32;
+//@ensures 0 <= \result; // sign bit is 0
+{
+  x >>= 1;
+  x &= 0x7FFFFFFF;
+  x >>= shift - 1;
+  return x;
+}
+
+// Argument dir represents a value x from 0 to pi/8.
+// If the bits of dir are a1, a2, a3, ..., a32, then
+// x = a1/4 + a2/8 + a3/16 + ... + a32/(2^33).
+// PRECONDITION: 0 <= x <= pi / 8.
+frac cos_approx(frac dir)
+{
+  dir = r_shift(dir, 16);
+  printf("shifted dir: %d (int) %s (hex)\n", dir, int2hex(dir));
+  //@assert dir <= int_max() / dir;
+  int dir_squared = dir * dir;
+  printf("dir_squared: %d (int) %s (hex)\n", dir_squared, int2hex(dir_squared));
+  /* 
+  C0 interprets dir (after the r_shift) as the number
+  (2^15)a1 + (2^14)a2 + ... + 2^(0)a16
+  = 2^(17) * x.
+  Hence dir * dir performs the operation
+  2^(17) * x * 2^(17) * x
+  = 2^(34) * x^2.
+  Thus dir_squared is scaled by 2^(34).
+  Since x < pi/8, we know x^2 < pi^2/64 = 0.1542.
+  Thus, dir * dir < 2^(34) * 0.1542 < 2^(34) * 2^(-2) = 2^32.
+  This can overflow, so we bit shift by 1 to get rid of the signed bit in the
+  actual term.
+  Hence, term2 is actually scaled by 2^33.
+  */
+  int term2 = -r_shift(dir_squared, 1) / factorial(2); // scaled by 2^(33)
+  dir_squared = r_shift(dir_squared, 16);
+  int dir_pow_four = dir_squared * dir_squared;
+  /*
+  Let y be the number dir_squared is meant to represent, namely
+  y = dir_squared / (2^34)
+  = b1/8 + b2/16 + b3/32 + ... + b32/(2^(34))
+  (ignoring the sign bit, as we are about to bit shift anyway).
+  
+  C0 interprets dir_squared (after the r_shift) as the number
+  (2^15)b1 + (2^14)b2 + ... + 2^(0)b16
+  = 2^(18) * y.
+  Hence dir_squared * dir_squared performs the operation
+  2^(18) * y * 2^(18) * y
+  = 2^(36) * y^2.
+  Hence, dir_pow_four is scaled by 2^(36).
+  Since x < 2pi and y = x^2, we know y^2 = x^4 < pi^4/(2^12) = 0.02378.
+  Thus, dir_squared * dir_squared < 2^(36) * 0.02378 < 2^(36) * 2^(-5) = 2^31.
+  This can't overflow, so there is no need to bit shift the term.
+  Thus term 3 is scaled by 2^36.
+  */
+  int term3 = dir_pow_four / factorial(4); // scaled by 2^(36)
+  dir_pow_four = r_shift(dir_pow_four, 16);
+  int dir_pow_six = dir_squared * dir_pow_four;
+  /*
+  Let z be the number dir_pow_four is meant to represent, namely
+  z = dir_pow_four / (2^36)
+  = c1/(2^5) + c2/(2^6) + c3/(2^7) + ... + c32/(2^36).
+  
+  C0 interprets dir_pow_four (after the r_shift) as the number
+  (2^15)c1 + (2^14)c2 + ... + 2^(0)c16
+  = 2^20 * z.
+  Hence dir_squared * dir_pow_four performs the operation
+  2^18 * y * 2^20 * z
+  = 2^(38) * yz.
+  Hence, dir_pow_six is scaled by 2^(38).
+  Since x < pi/8 and z = x^4 and y = x^2, we know yz = x^6 < pi^6/(2^18) = 0.003
+  Thus, dir_squared * dir_pow_four < 2^(15) * 0.003 < 2^(38) * 2^(-8) = 2^30.
+  This can't overflow, so there is no need to bit shift the term.
+  Thus term 4 is also scaled by 2^38.
+  */
+  int term4 = -dir_pow_six / factorial(6); // scaled by 2^(38);
+  // final result scaled by int_max (approx. 2^31), 
+  // so multiply terms accordingly by powers of 2
+  // do this by bit shifting
+  int term1 = int_max();
+  term2 >>= 2;
+  term3 >>= 5;
+  term4 >>= 7;
+  printf("int: ");
+  printf("%d + %d + %d + %d\n", term1, term2, term3, term4);
+  printf("hex: ");
+  printf("%s + %s + %s + %s\n", int2hex(term1), int2hex(term2), int2hex(term3),
+         int2hex(term4));
+  return term1 + term2 + term3 + term4;
+
+}
+
+/*
+Calculates the cosine of an angle, dir, between 0 and pi/8
+
+dir represents the input angle.
+If the bits of dir are a1, a2, a3, ..., a32, then dir represents the number
+(a1)/4 + (a2)/8 + (a3)/16 + ... + (a32)/(2^33).
+
+The return value represents a number from -1 to 1.
+If the bits of the return value are b1, b2, b3, ..., b32, then the return
+value represents the number
+-b1 + (b2)/2 + (b3)/4 + (b4)/8 + ... + (b32)/(2^31).
+*/
+frac cos(frac dir)
+//@requires 0 <= dir || dir <= 0xC90FDAA2;
+//@ensures 0 <= \result;
+{
+  dir = r_shift(dir, 16);
+  int dir_squared = dir * dir;  // scaled by 2^34
+  int val = int_max();
+  int t = 1;
+  int dir_power = dir_squared;
+  int term = 1;
+  while (term != 0)
+  //@
+  {
+    if (t == 1) {
+      term = -r_shift(dir_squared, 1) / factorial(2);
+      term >>= 2;
+
+      dir_squared = r_shift(dir_squared, 16);
+    } else {
+      dir_power = r_shift(dir_power, 16);
+      dir_power *= dir_squared;
+      if (t % 2 == 1) dir_power *= -1;
+      term = dir_power / factorial(2 * t);
+      term >>= (1 + 2 * t);
+    }
+    
+    // printf("%d\n", term);
+    val += term;
+    t++;
+  }
+
+  return val;
+}
+
+/*
+Calculates the sine of an angle, dir, between 0 and pi/8
+
+dir represents the input angle.
+If the bits of dir are a1, a2, a3, ..., a32, then dir represents the number
+(a1)/4 + (a2)/8 + (a3)/16 + ... + (a32)/(2^33).
+
+The return value represents a number from -1 to 1.
+If the bits of the return value are b1, b2, b3, ..., b32, then the return
+value represents the number
+-b1 + (b2)/2 + (b3)/4 + (b4)/8 + ... + (b32)/(2^31).
+*/
+int sin(int dir)
+//@requires 0 <= dir || dir <= 0xC90FDAA2;
+//@ensures 0 <= \result;
+{
+  int val = r_shift(dir, 2);
+  dir = r_shift(dir, 16);
+  int dir_squared = r_shift(dir * dir, 16);
+  int t = 1;
+  int dir_power = dir;
+  int term = 1;
+  while (term != 0)
+  {
+    if (t != 1) {dir_power = r_shift(dir_power, 16);}
+    dir_power *= dir_squared;
+    if (t % 2 == 1) dir_power *= -1;
+    term = dir_power / factorial(2 * t + 1);
+    term >>= (2 + 2 * t);
+    
+    // printf("%d\n", term);
+    val += term;
+    t++;
+  }
+
+  return val;
+}
+
+int dot(int x1, int y1, int x2, int y2)
+{
+  return x1 * x2 + y1 * y2;
+}
+
+// linear interpolation of x1, x2, a/b
+int lin_interp(int x1, int x2, frac a, frac b)
+//@requires 0 <= a && a <= b;
+{
+  int i = (int_max() / b * a) << 1;
+  int start = x1;
+  int end = x2;
+  int mid = start;
+  while (i != 0 && start != end) {
+    mid = (start / 2) + (end / 2);
+    if (i < 0) {start = mid;}
+    else {end = mid;}
+    i <<= 1;
+  }
+  return mid;
+}
+
+int fade(int x, int grid_size) 
+{
+  // Fade func by Ken Perlin:
+  // return t * t * t * (t * (t * 6 - 15) + 10);
+  // fades [0, 1] --> [0, 1]
+  return x * x * x * (x * (x * 6 - 15 * grid_size) + 10 * grid_size * grid_size)
+         / pow(grid_size, 4);
+}
+
+int scale_noise(int noise, int noise_bits)
+//@requires 0 <= noise_bits && noise_bits <= 32;
+/*@ensures -pow(2, noise_bits - 1) <= \result &&
+           \result < pow(2, noise_bits - 1); @*/
+{
+  if (noise < 0) {
+    noise = -noise;
+    noise = noise >> (32 - noise_bits);
+    return -noise;
+  } else {
+    return noise >> (32 - noise_bits);
+  }
+}
+
+pixel_t[] add_noise(pixel_t[] pixels, int width, int height, int grid_size,
+                    int noise_bits)
+//@requires is_valid_imagesize(width, height);
+//@requires \length(pixels) == width * height;
+//@requires 1 <= grid_size && grid_size <= min(width, height);
+//@requires 0 <= noise_bits && noise_bits <= 32;
+//@ensures \result != pixels;
+//@ensures \length(\result) == width * height;
+{
+  rand_t gen = init_rand(120405);  // initialize rng
+
+  pixel_t[] Result = alloc_array(pixel_t, width * height);  // return array
+
+  // width and height of the perlin noise grid
+  int grid_width = width / grid_size + 2;
+  int grid_height = width / grid_size + 2;
+  int grid_len = grid_width * grid_height;
+  // number of lattice points in the grid
+  int[] x_values = alloc_array(int, grid_len);  // x values of noise vectors
+  int[] y_values = alloc_array(int, grid_len);  // y values of noise vectors
+
+  // populate x_values and y_values　
+  int dir;
+  int sector;
+  int x;
+  int y;
+  for (int index = 0; index < grid_len; index++)
+  //@loop_invariant 0 <= index && index <= grid_len;
+  {
+    // dir is a random int in the domain of sin, cos
+    dir = rand(gen);
+    while (0xC90FDAA2 < dir && dir < 0) {dir = rand(gen);}
+
+    sector = rand(gen) & 0x00000007; // which eighth of the unit circle
+    if (sector % 2 >= 1) {
+      x = cos(dir);
+      y = sin(dir);
+    } else {
+      x = sin(dir);
+      y = cos(dir);
+    }
+    if (sector % 4 >= 2) {
+      x *= -1;
+    }
+    if (sector >= 4) {
+      y *= -1;
+    }
+
+    x /= grid_size * 2;  // prevent overflow later
+    y /= grid_size * 2;
+
+    x_values[index] = x;
+    y_values[index] = y;
+  }
+
+  int row;
+  int col;
+  int grid_x;
+  int grid_y;
+  int top_left_index;
+  int top_right_index;
+  int bottom_left_index;
+  int bottom_right_index;
+  int cell_x;
+  int faded_x;
+  int cell_y;
+  int faded_y;
+  int noise_top_left;
+  int noise_top_right;
+  int noise_bottom_left;
+  int noise_bottom_right;
+  int noise_top;
+  int noise_bottom;
+  int noise;
+  pixel_t p;
+  int r;
+  int g;
+  int b;
+
+  int[] Noise_arr = alloc_array(int, width * height);
+
+  // loop over each pixel in the resulting image
+  for (int index = 0; index < width * height; index++)
+  //@loop_invariant 0 <= index && index <= width * height;
+  {
+    // row and col of the pixel
+    row = get_row(index, width, height);
+    col = get_column(index, width, height);
+
+    /* coordinates of the top left corner of the grid square
+       containing the pixel */
+    grid_x = col / grid_size;
+    grid_y = row / grid_size;
+
+    // indices of the four corners of the grid square within the array
+    top_left_index = get_index(grid_y, grid_x, grid_width, grid_height);
+    top_right_index = get_index(grid_y, grid_x + 1, grid_width, grid_height);
+    bottom_left_index = get_index(grid_y + 1, grid_x, grid_width, grid_height);
+    bottom_right_index = get_index(grid_y + 1, grid_x + 1, grid_width,
+                                   grid_height);
+
+    // coordinates of the pixel within the grid cell
+    cell_x = col % grid_size;
+    cell_y = row % grid_size;
+
+    noise_top_left = dot(cell_x, cell_y,
+                         x_values[top_left_index],
+                         y_values[top_left_index]);
+    noise_top_right = dot(cell_x - grid_size, cell_y, 
+                          x_values[top_right_index],
+                          y_values[top_right_index]);
+    noise_bottom_left = dot(cell_x, cell_y - grid_size,
+                            x_values[bottom_left_index],
+                            y_values[bottom_left_index]);
+    noise_bottom_right = dot(cell_x - grid_size, cell_y - grid_size,
+                             x_values[bottom_right_index],
+                             y_values[bottom_right_index]);
+
+    // TODO: fade x, y
+    faded_x = fade(cell_x, grid_size);
+    faded_y = fade(cell_y, grid_size);
+    noise_top = lin_interp(noise_top_left, noise_top_right, faded_x, grid_size);
+    noise_bottom = lin_interp(noise_bottom_left, noise_bottom_right,
+                              faded_x, grid_size);
+    noise = lin_interp(noise_top, noise_bottom, faded_y, grid_size);
+    noise = scale_noise(noise, noise_bits);
+
+    // if ((grid_x == 0) && (grid_y == 1 || grid_y == 2)) {
+    //   if (!(16 < cell_y && cell_y < 48) && cell_x == 32) {
+    //     printf("\n\n%d, %d\n", cell_x, cell_y);
+    //     printf("top left: %d, %d, %d\n",
+    //            x_values[top_left_index], y_values[top_left_index],
+    //            noise_top_left);
+    //     printf("bottom left: %d, %d, %d\n",
+    //            x_values[bottom_left_index], y_values[bottom_left_index],
+    //            noise_bottom_left);
+    //     printf("top right: %d, %d, %d\n",
+    //            x_values[top_right_index], y_values[top_right_index],
+    //            noise_top_right);
+    //     printf("bottom right: %d, %d, %d\n",
+    //            x_values[bottom_right_index], y_values[bottom_right_index],
+    //            noise_bottom_right);
+    //     printf("%d, %d, %d\n", noise_top, noise_bottom, noise);
+    //   }
+    // }
+
+    Noise_arr[index] = noise;
+  }
+
+  int[] mask = alloc_array(int, 81);
+  int sum_weights = 0;
+  for (int i = 0; i < 81; i++) {
+    row = get_row(i, 9, 9);
+    col = get_column(i, 9, 9);
+    mask[i] = row + col;
+    sum_weights += row + col;
+  }
+
+  int[] Light_arr = alloc_array(int, width*height);
+  int weighted_sum;
+  int mask_row;
+  int mask_col;
+  int im_index;
+  for (int index = 0; index < width * height; index++) {
+    row = get_row(index, width, height);
+    col = get_column(index, width, height);
+    weighted_sum = 0;
+    for (int mask_i = 0; mask_i < 81; mask_i++) {
+      mask_row = get_row(mask_i, 9, 9) - 4;
+      mask_col = get_column(mask_i, 9, 9) - 4;
+      if (is_valid_pixel(row + mask_row, col + mask_col, width, height)){
+        im_index = get_index(row + mask_row, col + mask_col, width, height);
+        weighted_sum += mask[mask_i] * Noise_arr[im_index];
+        // printf("%d, %d\n", mask[mask_i], Noise_arr[im_index]);
+      }
+    }
+    Light_arr[index] = weighted_sum / sum_weights;
+    // printf("%d\n", weighted_sum);
+  }
+
+  int light;
+  for (int index = 0; index < width * height; index++) {
+    p = pixels[index];
+    light = Light_arr[index];
+    r = get_red(p) + light;
+    if (r > 255) r = 255;
+    if (r < 0) r = 0;
+
+    g = get_green(p) + light;
+    if (g > 255) g = 255;
+    if (g < 0) g = 0;
+
+    b = get_blue(p) + light;
+    if (b > 255) b = 255;
+    if (b < 0) b = 0;
+    Result[index] = make_pixel(get_alpha(p), r, g, b);
+  }
+
+  return Result;
+}
+
+int result_width(int width, int _height)
+{
+  return width;
+}
+
+int result_height(int _width, int height)
+{
+  return height;
+}
+
+pixel_t[] manipulate(pixel_t[] pixels, int width, int height)
+{
+  return add_noise(pixels, width, height, 64, 9);
+}
